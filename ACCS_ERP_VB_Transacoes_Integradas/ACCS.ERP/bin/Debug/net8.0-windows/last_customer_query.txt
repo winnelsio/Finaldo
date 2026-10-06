@@ -1,0 +1,5 @@
+SQL: SELECT id, company_id, name, nuit, phone, email, address, balance, loyalty_points, vip_discount, whatsapp, 1 AS active FROM customers WHERE company_id=@companyId ORDER BY id DESC LIMIT 20
+includeCompanyFilter=True
+companyId=1
+search=''
+hasActive=False, loyalty=True, vip=True, whatsapp=True

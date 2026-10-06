@@ -1,0 +1,103 @@
+Imports System.Windows.Forms
+Imports System.Drawing
+Imports System.IO
+Imports System.Linq
+Imports System.Diagnostics
+Imports ACCS.ERP.Models
+Imports ACCS.ERP.Services
+
+Namespace Forms
+    Public Class DashboardForm
+        Inherits Form
+        Private ReadOnly _session As UserSession
+        Public Sub New(session As UserSession)
+            _session = session
+            Text = "ACCS ERP — Dashboard"
+            StartPosition = FormStartPosition.CenterScreen
+            WindowState = FormWindowState.Maximized
+            BackColor = Color.FromArgb(245, 247, 250)
+            BuildUi()
+        End Sub
+        Private Sub BuildUi()
+            Dim header = New Panel With {.Dock = DockStyle.Top, .Height = 72, .BackColor = Color.FromArgb(0, 32, 96)}
+            Dim title = New Label With {.Text = "ACCS ERP", .ForeColor = Color.White, .Font = New Font("Segoe UI", 22, FontStyle.Bold), .AutoSize = True, .Location = New Point(24, 18)}
+            Dim user = New Label With {.Text = $"{_session.Name}  •  {_session.Role}", .ForeColor = Color.White, .AutoSize = True, .Location = New Point(250, 27), .Font = New Font("Segoe UI", 10)}
+            header.Controls.AddRange({title, user}) : Controls.Add(header)
+            ' Mostrar informações da empresa/usuário no header
+            Try
+                Dim compLabel As Label
+                Dim svc As New CompanyService()
+                Dim companies = Task.Run(Function() svc.ListActiveAsync()).GetAwaiter().GetResult()
+                Dim compName = "(Empresa desconhecida)"
+                If _session.CompanyId.HasValue Then
+                    Dim c = companies.FirstOrDefault(Function(x) x.Id = _session.CompanyId.Value)
+                    If c IsNot Nothing Then compName = c.Name
+                End If
+                compLabel = New Label With {.Text = $"Empresa: {compName}  (ID: {_session.CompanyId.GetValueOrDefault(0)})", .ForeColor = Color.White, .AutoSize = True, .Location = New Point(420, 27), .Font = New Font("Segoe UI", 9)}
+                Dim idLabel = New Label With {.Text = $"Utilizador: {_session.Name}  •  User ID: {_session.Id}", .ForeColor = Color.White, .AutoSize = True, .Location = New Point(420, 10), .Font = New Font("Segoe UI", 9)}
+                header.Controls.AddRange({idLabel, compLabel})
+            Catch
+                ' ignorar falhas ao obter nome da empresa
+            End Try
+            Dim menu = New FlowLayoutPanel With {.Dock = DockStyle.Left, .Width = 230, .Padding = New Padding(15), .FlowDirection = FlowDirection.TopDown, .BackColor = Color.White}
+            AddMenuButton(menu, "👥  Clientes", Sub()
+                                                    Using f As New CustomersForm(_session)
+                                                        f.ShowDialog(Me)
+                                                    End Using
+                                                End Sub)
+            AddMenuButton(menu, "📦  Produtos & Stock", Sub()
+                                                            Using f As New ProductsForm(_session)
+                                                                f.ShowDialog(Me)
+                                                            End Using
+                                                        End Sub)
+            AddMenuButton(menu, "🧾  Facturação", Sub()
+                                                      Using f As New InvoicesForm(_session)
+                                                          f.ShowDialog(Me)
+                                                      End Using
+                                                  End Sub)
+            AddMenuButton(menu, "📊  Relatórios & Fecho", Sub()
+                                                              Using f As New ReportsForm(_session)
+                                                                  f.ShowDialog(Me)
+                                                              End Using
+                                                          End Sub)
+            Controls.Add(menu)
+            ' Botão de diagnóstico rápido para exportar info da BD (schema, amostra, contagens)
+            Dim btnDiag As New Button With {.Text = "Diagnóstico BD", .Location = New Point(240, 18), .Width = 120, .Height = 32}
+            AddHandler btnDiag.Click, Sub()
+                                          Try
+                                              Dim svc = New Services.CustomerService()
+                                              Dim path = svc.ExportDbDiagnostic()
+                                              MessageBox.Show($"Ficheiro de diagnóstico gerado: {path}", "Diagnóstico BD", MessageBoxButtons.OK, MessageBoxIcon.Information)
+                                          Catch ex As Exception
+                                              MessageBox.Show($"Erro ao gerar diagnóstico: {ex.Message}", "Diagnóstico BD", MessageBoxButtons.OK, MessageBoxIcon.Error)
+                                          End Try
+                                      End Sub
+            Controls.Add(btnDiag)
+            ' Botão para abrir o ficheiro JSON de diagnóstico mais recente ou a pasta de output
+            Dim btnOpenDiag As New Button With {.Text = "Abrir Diagnóstico", .Location = New Point(370, 18), .Width = 140, .Height = 32}
+            AddHandler btnOpenDiag.Click, Sub()
+                                              Try
+                                                  Dim dir = AppContext.BaseDirectory
+                                                  Dim files = Directory.GetFiles(dir, "db_diagnostic_*.json")
+                                                  If files.Length = 0 Then
+                                                      MessageBox.Show("Nenhum ficheiro de diagnóstico encontrado. A abrir pasta de output.", "Diagnóstico BD", MessageBoxButtons.OK, MessageBoxIcon.Information)
+                                                      Process.Start(New ProcessStartInfo With {.FileName = dir, .UseShellExecute = True})
+                                                      Return
+                                                  End If
+                                                  Dim latest = files.OrderByDescending(Function(f) File.GetLastWriteTimeUtc(f)).First()
+                                                  Process.Start(New ProcessStartInfo With {.FileName = latest, .UseShellExecute = True})
+                                              Catch ex As Exception
+                                                  MessageBox.Show($"Erro ao abrir diagnóstico: {ex.Message}", "Diagnóstico BD", MessageBoxButtons.OK, MessageBoxIcon.Error)
+                                              End Try
+                                          End Sub
+            Controls.Add(btnOpenDiag)
+            Dim welcome = New Label With {.Text = "Bem-vindo ao ACCS ERP Desktop" & Environment.NewLine & Environment.NewLine & "Sistema Completo — Fases 1 a 5 Concluídas", .Font = New Font("Segoe UI", 20, FontStyle.Regular), .AutoSize = True, .Location = New Point(290, 140)}
+            Controls.Add(welcome)
+        End Sub
+        Private Sub AddMenuButton(parent As Control, caption As String, action As Action)
+            Dim b = New Button With {.Text = caption, .Width = 195, .Height = 45, .Margin = New Padding(0, 0, 0, 10), .FlatStyle = FlatStyle.Flat, .Font = New Font("Segoe UI", 10, FontStyle.Bold), .TextAlign = ContentAlignment.MiddleLeft}
+            AddHandler b.Click, Sub() action()
+            parent.Controls.Add(b)
+        End Sub
+    End Class
+End Namespace

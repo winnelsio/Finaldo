@@ -1,0 +1,38 @@
+﻿Imports MySqlConnector
+Imports System.IO
+Imports System.Text.Json
+Imports System.Threading.Tasks
+
+Namespace Data
+    Public Module Db
+        Private ReadOnly SettingsPath As String = Path.Combine(AppContext.BaseDirectory, "appsettings.json")
+
+        Public Function ConnectionString() As String
+            If Not File.Exists(SettingsPath) Then 
+                Throw New FileNotFoundException("Ficheiro appsettings.json não encontrado.", SettingsPath)
+            End If
+            Dim json = File.ReadAllText(SettingsPath)
+            Using doc = JsonDocument.Parse(json)
+                Return doc.RootElement.GetProperty("ConnectionStrings").GetProperty("AccsMySql").GetString()
+            End Using
+        End Function
+
+        ''' <summary>
+        ''' Abre uma conexão síncrona com a base de dados.
+        ''' </summary>
+        Public Function OpenConnection() As MySqlConnection
+            Dim cn = New MySqlConnection(ConnectionString())
+            cn.Open()
+            Return cn
+        End Function
+
+        ''' <summary>
+        ''' Abre uma conexão de forma assíncrona para não bloquear a UI thread.
+        ''' </summary>
+        Public Async Function OpenConnectionAsync() As Task(Of MySqlConnection)
+            Dim cn = New MySqlConnection(ConnectionString())
+            Await cn.OpenAsync()
+            Return cn
+        End Function
+    End Module
+End Namespace

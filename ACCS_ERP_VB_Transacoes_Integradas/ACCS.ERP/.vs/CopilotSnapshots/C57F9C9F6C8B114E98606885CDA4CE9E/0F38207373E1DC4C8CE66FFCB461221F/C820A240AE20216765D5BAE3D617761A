@@ -1,0 +1,258 @@
+﻿Imports MySqlConnector
+Imports ACCS.ERP.Data
+Imports ACCS.ERP.Models
+Imports System.Threading.Tasks
+Imports System.Text.Json
+Imports System.IO
+Imports System.Collections.Generic
+
+Namespace Services
+    Public Class CustomerService
+
+        Private Shared Async Function HasColumnAsync(cn As MySqlConnection, columnName As String) As Task(Of Boolean)
+            Const sql As String = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='customers' AND COLUMN_NAME=@column"
+            Using cmd As New MySqlCommand(sql, cn)
+                cmd.Parameters.AddWithValue("@column", columnName)
+                Dim count = Convert.ToInt32(Await cmd.ExecuteScalarAsync())
+                Return count > 0
+            End Using
+        End Function
+
+        Private Shared Function HasColumn(cn As MySqlConnection, columnName As String) As Boolean
+            Const sql As String = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='customers' AND COLUMN_NAME=@column"
+            Using cmd As New MySqlCommand(sql, cn)
+                cmd.Parameters.AddWithValue("@column", columnName)
+                Dim count = Convert.ToInt32(cmd.ExecuteScalar())
+                Return count > 0
+            End Using
+        End Function
+
+        Public Async Function ListAsync(companyId As Integer, Optional search As String = "", Optional includeCompanyFilter As Boolean = True) As Task(Of List(Of Customer))
+            Dim result As New List(Of Customer)()
+            Using cn = Await Db.OpenConnectionAsync()
+                Dim loyalty = Await HasColumnAsync(cn, "loyalty_points")
+                Dim vip = Await HasColumnAsync(cn, "vip_discount")
+                Dim whatsapp = Await HasColumnAsync(cn, "whatsapp")
+                Dim hasActive = Await HasColumnAsync(cn, "active")
+
+                Dim sql = "SELECT id, company_id, name, nuit, phone, email, address, balance" &
+                          If(loyalty, ", loyalty_points", ", 0 AS loyalty_points") &
+                          If(vip, ", vip_discount", ", 0 AS vip_discount") &
+                          If(whatsapp, ", whatsapp", ", '' AS whatsapp") &
+                          If(hasActive, ", active", ", 1 AS active") &
+                          " FROM customers"
+                If includeCompanyFilter Then
+                    sql &= " WHERE company_id=@companyId"
+                    If hasActive Then sql &= " AND active=1"
+                Else
+                    sql &= " WHERE 1=1"
+                    If hasActive Then sql &= " AND active=1"
+                End If
+
+                If Not String.IsNullOrWhiteSpace(search) Then
+                    sql &= " AND (name LIKE @search OR nuit LIKE @search OR phone LIKE @search OR email LIKE @search)"
+                End If
+                sql &= " ORDER BY id DESC LIMIT 20"
+
+                Using cmd As New MySqlCommand(sql, cn)
+                    If includeCompanyFilter Then cmd.Parameters.AddWithValue("@companyId", companyId)
+                    If Not String.IsNullOrWhiteSpace(search) Then cmd.Parameters.AddWithValue("@search", "%" & search.Trim() & "%")
+
+                    Using rd = Await cmd.ExecuteReaderAsync()
+                        While Await rd.ReadAsync()
+                            result.Add(New Customer With {
+                                .Id = Convert.ToInt32(rd("id")),
+                                .CompanyId = Convert.ToInt32(rd("company_id")),
+                                .Name = rd("name").ToString(),
+                                .Nuit = rd("nuit").ToString(),
+                                .Phone = rd("phone").ToString(),
+                                .Email = rd("email").ToString(),
+                                .Address = rd("address").ToString(),
+                                .Balance = Convert.ToDecimal(rd("balance")),
+                                .LoyaltyPoints = Convert.ToInt32(rd("loyalty_points")),
+                                .VipDiscount = Convert.ToDecimal(rd("vip_discount")),
+                                .WhatsApp = rd("whatsapp").ToString()
+                            })
+                        End While
+                    End Using
+                End Using
+            End Using
+            Return result
+        End Function
+
+        Public Function List(companyId As Integer, Optional search As String = "") As List(Of Customer)
+            Return Task.Run(Function() ListAsync(companyId, search)).GetAwaiter().GetResult()
+        End Function
+
+        Public Async Function SaveAsync(customer As Customer, companyId As Integer) As Task
+            If String.IsNullOrWhiteSpace(customer.Name) Then Throw New ArgumentException("Informe o nome do cliente.")
+            Dim nuit = New String(customer.Nuit.Where(Function(ch) Char.IsDigit(ch)).ToArray())
+            If nuit.Length <> 9 Then Throw New ArgumentException("NUIT inválido. Deve ter exactamente 9 dígitos.")
+
+            Using cn = Await Db.OpenConnectionAsync()
+                Dim loyalty = Await HasColumnAsync(cn, "loyalty_points")
+                Dim vip = Await HasColumnAsync(cn, "vip_discount")
+                Dim whatsapp = Await HasColumnAsync(cn, "whatsapp")
+
+                If customer.Id = 0 Then
+                    Dim cols = "company_id,name,nuit,phone,email,address,balance"
+                    Dim vals = "@companyId,@name,@nuit,@phone,@email,@address,0"
+                    If loyalty Then cols &= ",loyalty_points" : vals &= ",@loyalty"
+                    If vip Then cols &= ",vip_discount" : vals &= ",@vip"
+                    If whatsapp Then cols &= ",whatsapp" : vals &= ",@whatsapp"
+
+                    Using cmd As New MySqlCommand($"INSERT INTO customers ({cols}) VALUES ({vals})", cn)
+                        AddParams(cmd, customer, companyId, nuit, loyalty, vip, whatsapp)
+                        Await cmd.ExecuteNonQueryAsync()
+                    End Using
+                Else
+                    Dim sets = "name=@name,nuit=@nuit,phone=@phone,email=@email,address=@address"
+                    If loyalty Then sets &= ",loyalty_points=@loyalty"
+                    If vip Then sets &= ",vip_discount=@vip"
+                    If whatsapp Then sets &= ",whatsapp=@whatsapp"
+
+                    Using cmd As New MySqlCommand($"UPDATE customers SET {sets} WHERE id=@id AND company_id=@companyId", cn)
+                        cmd.Parameters.AddWithValue("@id", customer.Id)
+                        AddParams(cmd, customer, companyId, nuit, loyalty, vip, whatsapp)
+                        Await cmd.ExecuteNonQueryAsync()
+                    End Using
+                End If
+            End Using
+        End Function
+
+        Public Sub Save(customer As Customer, companyId As Integer)
+            Task.Run(Function() SaveAsync(customer, companyId)).GetAwaiter().GetResult()
+        End Sub
+
+        Public Async Function DeleteAsync(id As Integer, companyId As Integer) As Task
+            Using cn = Await Db.OpenConnectionAsync()
+                Dim hasActive = Await HasColumnAsync(cn, "active")
+                If Not hasActive Then Throw New InvalidOperationException("A base precisa da coluna customers.active. Execute database\001_stabilization.sql antes de desactivar clientes.")
+                Using cmd As New MySqlCommand("UPDATE customers SET active=0 WHERE id=@id AND company_id=@companyId", cn)
+                    cmd.Parameters.AddWithValue("@id", id)
+                    cmd.Parameters.AddWithValue("@companyId", companyId)
+                    Await cmd.ExecuteNonQueryAsync()
+                End Using
+            End Using
+        End Function
+
+        Public Sub Delete(id As Integer, companyId As Integer)
+            Task.Run(Function() DeleteAsync(id, companyId)).GetAwaiter().GetResult()
+        End Sub
+
+        ''' <summary>
+        ''' Retorna um dicionário com total de clientes por company_id.
+        ''' Se a coluna 'active' existir, conta apenas clientes activos.
+        ''' </summary>
+        Public Async Function GetCountsByCompanyAsync() As Task(Of Dictionary(Of Integer, Integer))
+            Dim result As New Dictionary(Of Integer, Integer)()
+            Using cn = Await Db.OpenConnectionAsync()
+                Dim hasActive = Await HasColumnAsync(cn, "active")
+                Dim sql = "SELECT company_id, COUNT(*) AS total_clientes FROM customers " & If(hasActive, "WHERE active=1 ", "") & "GROUP BY company_id ORDER BY company_id"
+                Using cmd As New MySqlCommand(sql, cn)
+                    Using rd = Await cmd.ExecuteReaderAsync()
+                        While Await rd.ReadAsync()
+                            Dim cid = If(rd("company_id") Is DBNull.Value, 0, Convert.ToInt32(rd("company_id")))
+                            Dim total = If(rd("total_clientes") Is DBNull.Value, 0, Convert.ToInt32(rd("total_clientes")))
+                            result(cid) = total
+                        End While
+                    End Using
+                End Using
+            End Using
+            Return result
+        End Function
+
+        Public Function GetCountsByCompany() As Dictionary(Of Integer, Integer)
+            Return Task.Run(Function() GetCountsByCompanyAsync()).GetAwaiter().GetResult()
+        End Function
+
+        ''' <summary>
+        ''' Executa várias queries de diagnóstico e exporta os resultados para um ficheiro JSON
+        ''' no diretório de output da aplicação. Retorna o caminho do ficheiro gerado.
+        ''' Queries realizadas:
+        ''' - contagem de clientes por company_id
+        ''' - SELECT * FROM companies
+        ''' - estrutura da tabela customers (INFORMATION_SCHEMA.COLUMNS)
+        ''' - amostra de 20 linhas de customers
+        ''' </summary>
+        Public Async Function ExportDbDiagnosticAsync(Optional outputPath As String = "") As Task(Of String)
+            If String.IsNullOrWhiteSpace(outputPath) Then
+                outputPath = Path.Combine(AppContext.BaseDirectory, $"db_diagnostic_{DateTime.Now:yyyyMMdd_HHmmss}.json")
+            End If
+
+            Dim doc As New Dictionary(Of String, Object)()
+
+            Using cn = Await Db.OpenConnectionAsync()
+                ' 1) contagem por company
+                Dim counts = Await GetCountsByCompanyAsync()
+                doc("counts_by_company") = counts
+
+                ' 2) companies
+                Dim companies As New List(Of Dictionary(Of String, Object))()
+                Using cmd As New MySqlCommand("SELECT * FROM companies", cn)
+                    Using rd = Await cmd.ExecuteReaderAsync()
+                        While Await rd.ReadAsync()
+                            Dim row As New Dictionary(Of String, Object)()
+                            For i = 0 To rd.FieldCount - 1
+                                row(rd.GetName(i)) = If(rd.IsDBNull(i), Nothing, rd.GetValue(i)?.ToString())
+                            Next
+                            companies.Add(row)
+                        End While
+                    End Using
+                End Using
+                doc("companies") = companies
+
+                ' 3) estrutura da tabela customers
+                Dim cols As New List(Of Dictionary(Of String, Object))()
+                Using cmd As New MySqlCommand("SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, COLUMN_DEFAULT FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='customers' ORDER BY ORDINAL_POSITION", cn)
+                    Using rd = Await cmd.ExecuteReaderAsync()
+                        While Await rd.ReadAsync()
+                            Dim row As New Dictionary(Of String, Object)()
+                            For i = 0 To rd.FieldCount - 1
+                                row(rd.GetName(i)) = If(rd.IsDBNull(i), Nothing, rd.GetValue(i)?.ToString())
+                            Next
+                            cols.Add(row)
+                        End While
+                    End Using
+                End Using
+                doc("customers_columns") = cols
+
+                ' 4) amostra de customers
+                Dim sample As New List(Of Dictionary(Of String, Object))()
+                Using cmd As New MySqlCommand("SELECT * FROM customers ORDER BY id DESC LIMIT 20", cn)
+                    Using rd = Await cmd.ExecuteReaderAsync()
+                        While Await rd.ReadAsync()
+                            Dim row As New Dictionary(Of String, Object)()
+                            For i = 0 To rd.FieldCount - 1
+                                row(rd.GetName(i)) = If(rd.IsDBNull(i), Nothing, rd.GetValue(i)?.ToString())
+                            Next
+                            sample.Add(row)
+                        End While
+                    End Using
+                End Using
+                doc("customers_sample") = sample
+            End Using
+
+            Dim options = New JsonSerializerOptions With {.WriteIndented = True}
+            Dim json = JsonSerializer.Serialize(doc, options)
+            File.WriteAllText(outputPath, json)
+            Return outputPath
+        End Function
+
+        Public Function ExportDbDiagnostic(Optional outputPath As String = "") As String
+            Return Task.Run(Function() ExportDbDiagnosticAsync(outputPath)).GetAwaiter().GetResult()
+        End Function
+
+        Private Shared Sub AddParams(cmd As MySqlCommand, c As Customer, companyId As Integer, nuit As String, loyalty As Boolean, vip As Boolean, whatsapp As Boolean)
+            cmd.Parameters.AddWithValue("@companyId", companyId)
+            cmd.Parameters.AddWithValue("@name", c.Name.Trim())
+            cmd.Parameters.AddWithValue("@nuit", nuit)
+            cmd.Parameters.AddWithValue("@phone", c.Phone.Trim())
+            cmd.Parameters.AddWithValue("@email", c.Email.Trim())
+            cmd.Parameters.AddWithValue("@address", c.Address.Trim())
+            If loyalty Then cmd.Parameters.AddWithValue("@loyalty", c.LoyaltyPoints)
+            If vip Then cmd.Parameters.AddWithValue("@vip", c.VipDiscount)
+            If whatsapp Then cmd.Parameters.AddWithValue("@whatsapp", c.WhatsApp.Trim())
+        End Sub
+    End Class
+End Namespace

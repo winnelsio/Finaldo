@@ -1,0 +1,183 @@
+﻿Imports ACCS.ERP.Services
+Imports ACCS.ERP.Models
+
+Namespace Forms
+    Public Class LoginForm
+        Inherits Form
+
+        Private ReadOnly txtUser As New TextBox()
+        Private ReadOnly txtPassword As New TextBox()
+        Private ReadOnly cboCompany As New ComboBox()
+        Private ReadOnly cboFiscalYear As New ComboBox()
+        Private ReadOnly chkRemember As New CheckBox()
+        Private ReadOnly chkShowPassword As New CheckBox()
+        Private ReadOnly btnLogin As New Button()
+        Private ReadOnly btnCancel As New Button()
+        Private ReadOnly lblStatus As New Label()
+        Private ReadOnly lblServerStatus As New Label()
+        Private ReadOnly _authService As New AuthService()
+        Private ReadOnly _companyService As New CompanyService()
+
+        Public Sub New()
+            Text = "ACCS ERP Enterprise — Autenticação"
+            StartPosition = FormStartPosition.CenterScreen
+            Size = New Size(540, 480)
+            FormBorderStyle = FormBorderStyle.FixedDialog
+            MaximizeBox = False
+            MinimizeBox = False
+            BackColor = Color.FromArgb(245, 247, 250)
+
+            BuildUi()
+        End Sub
+
+        Private Sub BuildUi()
+            ' Top Banner
+            Dim header As New Panel With {
+                .Dock = DockStyle.Top,
+                .Height = 80,
+                .BackColor = Color.FromArgb(0, 32, 96)
+            }
+
+            Dim lblTitle As New Label With {
+                .Text = "ACCS ERP ENTERPRISE",
+                .Font = New Font("Segoe UI", 16, FontStyle.Bold),
+                .ForeColor = Color.White,
+                .AutoSize = True,
+                .Location = New Point(25, 16)
+            }
+
+            Dim lblSubtitle As New Label With {
+                .Text = "Sistema Integrado de Gestão Empresarial • .NET 8 WinForms",
+                .Font = New Font("Segoe UI", 9, FontStyle.Regular),
+                .ForeColor = Color.FromArgb(180, 205, 255),
+                .AutoSize = True,
+                .Location = New Point(26, 46)
+            }
+            header.Controls.AddRange({lblTitle, lblSubtitle})
+            Controls.Add(header)
+
+            Dim y = 100
+
+            ' Empresa / Tenant
+            Dim lblEmpresa As New Label With {.Text = "Empresa / Filial:", .Location = New Point(40, y), .AutoSize = True, .Font = New Font("Segoe UI", 9, FontStyle.Bold)}
+            cboCompany.SetBounds(40, y + 20, 440, 28)
+            cboCompany.DropDownStyle = ComboBoxStyle.DropDownList
+            AddHandler Me.Shown, AddressOf LoadCompaniesAsync
+            y += 58
+
+            ' Utilizador
+            Dim lblU As New Label With {.Text = "Nome de Utilizador:", .Location = New Point(40, y), .AutoSize = True, .Font = New Font("Segoe UI", 9, FontStyle.Bold)}
+            txtUser.SetBounds(40, y + 20, 440, 28)
+            txtUser.Text = "admin"
+            y += 58
+
+            ' Palavra-passe
+            Dim lblP As New Label With {.Text = "Palavra-passe:", .Location = New Point(40, y), .AutoSize = True, .Font = New Font("Segoe UI", 9, FontStyle.Bold)}
+            txtPassword.SetBounds(40, y + 20, 440, 28)
+            txtPassword.UseSystemPasswordChar = True
+            y += 54
+
+            ' Checkboxes
+            chkShowPassword.Text = "Mostrar palavra-passe"
+            chkShowPassword.Location = New Point(40, y)
+            chkShowPassword.AutoSize = True
+            AddHandler chkShowPassword.CheckedChanged, Sub() txtPassword.UseSystemPasswordChar = Not chkShowPassword.Checked
+
+            chkRemember.Text = "Lembrar utilizador neste posto"
+            chkRemember.Location = New Point(260, y)
+            chkRemember.AutoSize = True
+            chkRemember.Checked = True
+            y += 34
+
+            ' Status
+            lblStatus.SetBounds(40, y, 440, 36)
+            lblStatus.ForeColor = Color.Firebrick
+            lblStatus.Font = New Font("Segoe UI", 9, FontStyle.Regular)
+            y += 40
+
+            ' Buttons
+            btnLogin.Text = "Entrar no Sistema"
+            btnLogin.SetBounds(40, y, 220, 36)
+            btnLogin.BackColor = Color.FromArgb(0, 32, 96)
+            btnLogin.ForeColor = Color.White
+            btnLogin.FlatStyle = FlatStyle.Flat
+            btnLogin.Font = New Font("Segoe UI", 9, FontStyle.Bold)
+            AddHandler btnLogin.Click, AddressOf LoginClicked
+
+            btnCancel.Text = "Sair"
+            btnCancel.SetBounds(270, y, 210, 36)
+            btnCancel.BackColor = Color.FromArgb(230, 235, 240)
+            btnCancel.FlatStyle = FlatStyle.Flat
+            AddHandler btnCancel.Click, Sub() Application.Exit()
+
+            ' Server info
+            lblServerStatus.Text = "🟢 Conectado ao MySQL: accs_escritorio | Criptografia BCrypt Activa"
+            lblServerStatus.Location = New Point(40, y + 46)
+            lblServerStatus.AutoSize = True
+            lblServerStatus.ForeColor = Color.FromArgb(80, 110, 140)
+            lblServerStatus.Font = New Font("Segoe UI", 8, FontStyle.Regular)
+
+            Controls.AddRange({lblEmpresa, cboCompany, lblU, txtUser, lblP, txtPassword,
+                               chkShowPassword, chkRemember, lblStatus, btnLogin, btnCancel, lblServerStatus})
+
+            AcceptButton = btnLogin
+            CancelButton = btnCancel
+        End Sub
+
+
+        Private Async Sub LoadCompaniesAsync(sender As Object, e As EventArgs)
+            Try
+                cboCompany.DataSource = Await _companyService.ListActiveAsync()
+                cboCompany.DisplayMember = "Name"
+                cboCompany.ValueMember = "Id"
+                If cboCompany.Items.Count = 0 Then
+                    lblStatus.Text = "Nenhuma empresa activa foi encontrada na base de dados."
+                    btnLogin.Enabled = False
+                End If
+            Catch ex As Exception
+                lblStatus.Text = "Não foi possível carregar as empresas: " & ex.Message
+                btnLogin.Enabled = False
+            End Try
+        End Sub
+
+        Private Async Sub LoginClicked(sender As Object, e As EventArgs)
+            lblStatus.Text = ""
+            If String.IsNullOrWhiteSpace(txtUser.Text) OrElse String.IsNullOrWhiteSpace(txtPassword.Text) Then
+                lblStatus.Text = "Por favor, introduza o utilizador e a palavra-passe."
+                Return
+            End If
+
+            Try
+                btnLogin.Enabled = False
+                btnLogin.Text = "A autenticar..."
+                lblStatus.ForeColor = Color.DarkSlateBlue
+                lblStatus.Text = "A validar credenciais com o servidor MySQL..."
+
+                Dim selectedCompany = TryCast(cboCompany.SelectedItem, Company)
+                If selectedCompany Is Nothing Then
+                    lblStatus.Text = "Seleccione uma empresa válida."
+                    Return
+                End If
+                Dim session = Await _authService.LoginAsync(txtUser.Text.Trim(), txtPassword.Text, selectedCompany.Id)
+
+                If session Is Nothing Then
+                    lblStatus.ForeColor = Color.Firebrick
+                    lblStatus.Text = "Utilizador, palavra-passe ou estado da conta inválido."
+                    Return
+                End If
+
+                Hide()
+                Using dashboard As New DashboardForm(session)
+                    dashboard.ShowDialog(Me)
+                End Using
+                Close()
+            Catch ex As Exception
+                lblStatus.ForeColor = Color.Firebrick
+                lblStatus.Text = "Erro de ligação à base de dados: " & ex.Message
+            Finally
+                btnLogin.Enabled = True
+                btnLogin.Text = "Entrar no Sistema"
+            End Try
+        End Sub
+    End Class
+End Namespace

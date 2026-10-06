@@ -1,0 +1,123 @@
+﻿Imports ACCS.ERP.Models
+Imports ACCS.ERP.Services
+
+Namespace Forms
+    Public Class InvoicesForm
+        Inherits Form
+
+        Private ReadOnly _session As UserSession
+        Private ReadOnly _invoiceService As New InvoiceService()
+        Private ReadOnly _customerService As New CustomerService()
+        Private ReadOnly _productService As New ProductService()
+
+        Private ReadOnly grid As New DataGridView()
+        Private ReadOnly txtSearch As New TextBox()
+        Private ReadOnly cboDocTypeFilter As New ComboBox()
+        Private ReadOnly btnNewInvoice As New Button()
+
+        Public Sub New(session As UserSession)
+            _session = session
+            Text = "ACCS ERP — Facturação e Emissão de Documentos"
+            StartPosition = FormStartPosition.CenterParent
+            Size = New Size(1300, 760)
+            MinimumSize = New Size(1024, 600)
+            BuildUi()
+            LoadInvoices()
+        End Sub
+
+        Private Sub BuildUi()
+            ' Top Toolbar
+            Dim top = New Panel With {.Dock = DockStyle.Top, .Height = 56, .Padding = New Padding(12), .BackColor = Color.White}
+            Dim title = New Label With {.Text = "FACTURAÇÃO & DOCUMENTOS", .Font = New Font("Segoe UI", 15, FontStyle.Bold), .AutoSize = True, .Location = New Point(12, 14), .ForeColor = Color.FromArgb(0, 32, 96)}
+
+            txtSearch.Location = New Point(320, 14)
+            txtSearch.Width = 300
+            txtSearch.PlaceholderText = "Pesquisar número de documento, cliente ou NUIT..."
+            AddHandler txtSearch.TextChanged, Sub() LoadInvoices()
+
+            cboDocTypeFilter.Location = New Point(635, 14)
+            cboDocTypeFilter.Width = 200
+            cboDocTypeFilter.DropDownStyle = ComboBoxStyle.DropDownList
+            cboDocTypeFilter.Items.AddRange({
+                "TODOS OS DOCUMENTOS",
+                "📄 Factura (FT)",
+                "🧾 Factura Recibo (FR)",
+                "💰 Recibo (RC)",
+                "📝 Proforma / Cotação (FP)",
+                "🔄 Nota Crédito (NC)",
+                "➕ Nota Débito (ND)"
+            })
+            cboDocTypeFilter.SelectedIndex = 0
+            AddHandler cboDocTypeFilter.SelectedIndexChanged, Sub() LoadInvoices()
+
+            btnNewInvoice.Text = "➕ Emitir Novo Documento"
+            btnNewInvoice.Location = New Point(850, 12)
+            btnNewInvoice.Width = 200
+            btnNewInvoice.Height = 32
+            btnNewInvoice.BackColor = Color.FromArgb(0, 32, 96)
+            btnNewInvoice.ForeColor = Color.White
+            btnNewInvoice.FlatStyle = FlatStyle.Flat
+            btnNewInvoice.Font = New Font("Segoe UI", 9, FontStyle.Bold)
+            AddHandler btnNewInvoice.Click, AddressOf OpenNewInvoiceDialog
+
+            top.Controls.AddRange({title, txtSearch, cboDocTypeFilter, btnNewInvoice})
+            Controls.Add(top)
+
+            ' Main DataGridView
+            grid.Dock = DockStyle.Fill
+            grid.ReadOnly = True
+            grid.AllowUserToAddRows = False
+            grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect
+            grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill
+            grid.RowHeadersVisible = False
+            Controls.Add(grid)
+        End Sub
+
+        Private Sub LoadInvoices()
+            Try
+                Dim typeFilter = ""
+                If cboDocTypeFilter.SelectedIndex > 0 Then
+                    Dim sel = cboDocTypeFilter.SelectedItem.ToString()
+                    typeFilter = sel.Substring(0, 2)
+                End If
+
+                Dim rows = _invoiceService.List(If(_session.CompanyId.HasValue, _session.CompanyId.Value, 0), typeFilter, txtSearch.Text)
+                grid.DataSource = Nothing
+                grid.DataSource = rows
+
+                For Each c As DataGridViewColumn In grid.Columns
+                    c.Visible = False
+                Next
+
+                ShowCol("DocumentNumber", "Nº Documento", 130)
+                ShowCol("DocumentTypeName", "Tipo", 160)
+                ShowCol("DateIssued", "Data Emissão", 100, "dd/MM/yyyy")
+                ShowCol("CustomerName", "Cliente", 240)
+                ShowCol("CustomerNuit", "NUIT", 100)
+                ShowCol("Subtotal", "Incidência (MT)", 110, "N2")
+                ShowCol("TaxTotal", "Imposto (MT)", 100, "N2")
+                ShowCol("RetentionAmount", "Retenção (MT)", 90, "N2")
+                ShowCol("TotalAmount", "Total Documento (MT)", 130, "N2")
+                ShowCol("Status", "Estado", 90)
+            Catch ex As Exception
+                MessageBox.Show("Erro ao carregar documentos: " & ex.Message, "ACCS ERP", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            End Try
+        End Sub
+
+        Private Sub ShowCol(name As String, header As String, width As Integer, Optional format As String = "")
+            If grid.Columns.Contains(name) Then
+                grid.Columns(name).Visible = True
+                grid.Columns(name).HeaderText = header
+                grid.Columns(name).Width = width
+                If format <> "" Then grid.Columns(name).DefaultCellStyle.Format = format
+            End If
+        End Sub
+
+        Private Sub OpenNewInvoiceDialog(sender As Object, e As EventArgs)
+            Using f As New DocumentEntryForm(_session)
+                AddHandler f.DocumentSaved, Sub() LoadInvoices()
+                f.ShowDialog(Me)
+            End Using
+        End Sub
+    End Class
+End Namespace

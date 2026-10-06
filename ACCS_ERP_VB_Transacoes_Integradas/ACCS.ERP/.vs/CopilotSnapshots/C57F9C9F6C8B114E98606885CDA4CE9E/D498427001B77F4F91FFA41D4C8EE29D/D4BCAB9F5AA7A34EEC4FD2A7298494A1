@@ -1,0 +1,172 @@
+﻿Imports ACCS.ERP.Models
+Imports ACCS.ERP.Services
+
+Namespace Forms
+    Public Class CustomersForm
+        Inherits Form
+        Private ReadOnly _session As UserSession
+        Private ReadOnly _service As New CustomerService()
+        Private ReadOnly grid As New DataGridView()
+        Private ReadOnly txtSearch As New TextBox()
+        Private ReadOnly txtName As New TextBox()
+        Private ReadOnly txtNuit As New TextBox()
+        Private ReadOnly txtPhone As New TextBox()
+        Private ReadOnly txtWhatsApp As New TextBox()
+        Private ReadOnly txtEmail As New TextBox()
+        Private ReadOnly txtAddress As New TextBox()
+        Private ReadOnly numLoyalty As New NumericUpDown()
+        Private ReadOnly numVip As New NumericUpDown()
+        Private ReadOnly btnSave As New Button()
+        Private ReadOnly btnCancel As New Button()
+        Private ReadOnly btnDelete As New Button()
+        Private editingId As Integer = 0
+
+        Public Sub New(session As UserSession)
+            _session = session
+            Text = "ACCS ERP — Clientes"
+            StartPosition = FormStartPosition.CenterParent
+            Size = New Size(1200, 720)
+            MinimumSize = New Size(1000, 620)
+            BuildUi()
+            LoadCustomers()
+        End Sub
+
+        Private Sub BuildUi()
+            Dim top = New Panel With {.Dock = DockStyle.Top, .Height = 52, .Padding = New Padding(12)}
+            Dim title = New Label With {.Text = "CLIENTES", .Font = New Font("Segoe UI", 16, FontStyle.Bold), .AutoSize = True, .Location = New Point(12, 13)}
+            txtSearch.Location = New Point(180, 12) : txtSearch.Width = 300 : txtSearch.PlaceholderText = "Pesquisar nome, NUIT, telefone..."
+            AddHandler txtSearch.TextChanged, Sub() LoadCustomers()
+            top.Controls.AddRange({title, txtSearch})
+            Controls.Add(top)
+
+            Dim editor = New GroupBox With {.Text = "Registo / Edição", .Dock = DockStyle.Right, .Width = 390, .Padding = New Padding(12)}
+            Dim y = 28
+            AddField(editor, "Nome / Empresa *", txtName, y) : y += 58
+            AddField(editor, "NUIT *", txtNuit, y) : y += 58
+            AddField(editor, "Telefone", txtPhone, y) : y += 58
+            AddField(editor, "WhatsApp", txtWhatsApp, y) : y += 58
+            AddField(editor, "E-mail", txtEmail, y) : y += 58
+            AddField(editor, "Endereço", txtAddress, y, 70) : y += 88
+            AddNumeric(editor, "Pontos Fidelidade", numLoyalty, y) : y += 58
+            AddNumeric(editor, "Desconto VIP (%)", numVip, y) : y += 58
+            numVip.DecimalPlaces = 2 : numVip.Maximum = 100
+            btnSave.Text = "Guardar Cliente" : btnSave.Width = 150 : btnSave.Location = New Point(15, y)
+            btnCancel.Text = "Limpar" : btnCancel.Width = 100 : btnCancel.Location = New Point(175, y)
+            btnDelete.Text = "Eliminar" : btnDelete.Width = 100 : btnDelete.Location = New Point(280, y)
+            AddHandler btnSave.Click, AddressOf SaveCustomer
+            AddHandler btnCancel.Click, Sub() ClearForm()
+            AddHandler btnDelete.Click, AddressOf DeleteCustomer
+            editor.Controls.AddRange({btnSave, btnCancel, btnDelete})
+            Controls.Add(editor)
+
+            grid.Dock = DockStyle.Fill
+            grid.ReadOnly = True
+            grid.AllowUserToAddRows = False
+            grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect
+            grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill
+            grid.RowHeadersVisible = False
+            AddHandler grid.CellDoubleClick, AddressOf GridDoubleClick
+            Controls.Add(grid)
+        End Sub
+
+        Private Sub AddField(parent As Control, labelText As String, box As Control, y As Integer, Optional height As Integer = 28)
+            parent.Controls.Add(New Label With {.Text = labelText, .Location = New Point(15, y), .AutoSize = True})
+            box.Location = New Point(15, y + 20) : box.Width = parent.Width - 45
+            If TypeOf box Is TextBox AndAlso height > 40 Then DirectCast(box, TextBox).Multiline = True
+            box.Height = height
+            parent.Controls.Add(box)
+        End Sub
+
+        Private Sub AddNumeric(parent As Control, labelText As String, box As NumericUpDown, y As Integer)
+            parent.Controls.Add(New Label With {.Text = labelText, .Location = New Point(15, y), .AutoSize = True})
+            box.Location = New Point(15, y + 20) : box.Width = 160 : box.Height = 28
+            parent.Controls.Add(box)
+        End Sub
+
+        Private Async Sub LoadCustomers()
+            Try
+                btnSave.Enabled = False
+                Dim companyId = If(_session.CompanyId.HasValue, _session.CompanyId.Value, 0)
+                Dim rows = Await _service.ListAsync(companyId, txtSearch.Text)
+                grid.DataSource = Nothing
+                grid.DataSource = rows
+                For Each c As DataGridViewColumn In grid.Columns
+                    c.Visible = False
+                Next
+                ShowCol("Name", "Nome / Empresa", 220)
+                ShowCol("Nuit", "NUIT", 100)
+                ShowCol("Phone", "Telefone", 120)
+                ShowCol("WhatsApp", "WhatsApp", 120)
+                ShowCol("Email", "E-mail", 160)
+                ShowCol("Balance", "Saldo", 100, "N2")
+                ShowCol("LoyaltyPoints", "Pontos", 80)
+                ShowCol("VipDiscount", "VIP %", 80, "N2")
+            Catch ex As Exception
+                MessageBox.Show("Não foi possível carregar os clientes." & Environment.NewLine & ex.Message, "ACCS ERP", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            Finally
+                btnSave.Enabled = True
+            End Try
+        End Sub
+
+        Private Sub ShowCol(name As String, header As String, width As Integer, Optional format As String = "")
+            If grid.Columns.Contains(name) Then
+                grid.Columns(name).Visible = True : grid.Columns(name).HeaderText = header : grid.Columns(name).Width = width
+                If format <> "" Then grid.Columns(name).DefaultCellStyle.Format = format
+            End If
+        End Sub
+
+        Private Sub GridDoubleClick(sender As Object, e As DataGridViewCellEventArgs)
+            If e.RowIndex < 0 Then Return
+            Dim c = TryCast(grid.Rows(e.RowIndex).DataBoundItem, Customer)
+            If c Is Nothing Then Return
+            editingId = c.Id : txtName.Text = c.Name : txtNuit.Text = c.Nuit : txtPhone.Text = c.Phone : txtWhatsApp.Text = c.WhatsApp
+            txtEmail.Text = c.Email : txtAddress.Text = c.Address : numLoyalty.Value = Math.Max(numLoyalty.Minimum, Math.Min(numLoyalty.Maximum, c.LoyaltyPoints))
+            numVip.Value = Math.Max(numVip.Minimum, Math.Min(numVip.Maximum, c.VipDiscount)) : btnSave.Text = "Actualizar Cliente"
+        End Sub
+
+        Private Async Sub SaveCustomer(sender As Object, e As EventArgs)
+            Try
+                btnSave.Enabled = False
+                Dim c As New Customer With {
+                    .Id = editingId,
+                    .CompanyId = _session.CompanyId.GetValueOrDefault(),
+                    .Name = txtName.Text,
+                    .Nuit = txtNuit.Text,
+                    .Phone = txtPhone.Text,
+                    .WhatsApp = txtWhatsApp.Text,
+                    .Email = txtEmail.Text,
+                    .Address = txtAddress.Text,
+                    .LoyaltyPoints = CInt(numLoyalty.Value),
+                    .VipDiscount = numVip.Value
+                }
+                Await _service.SaveAsync(c, c.CompanyId)
+                MessageBox.Show(If(editingId = 0, "Cliente registado com sucesso.", "Cliente actualizado com sucesso."), "ACCS ERP", MessageBoxButtons.OK, MessageBoxIcon.Information)
+                ClearForm()
+                LoadCustomers()
+            Catch ex As Exception
+                MessageBox.Show(ex.Message, "ACCS ERP", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+            Finally
+                btnSave.Enabled = True
+            End Try
+        End Sub
+
+        Private Async Sub DeleteCustomer(sender As Object, e As EventArgs)
+            If editingId = 0 Then Return
+            If MessageBox.Show("Eliminar este cliente?", "Confirmação", MessageBoxButtons.YesNo, MessageBoxIcon.Question) <> DialogResult.Yes Then Return
+            Try
+                btnDelete.Enabled = False
+                Await _service.DeleteAsync(editingId, _session.CompanyId.GetValueOrDefault())
+                ClearForm()
+                LoadCustomers()
+            Catch ex As Exception
+                MessageBox.Show("Não foi possível eliminar o cliente." & Environment.NewLine & ex.Message, "ACCS ERP", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            Finally
+                btnDelete.Enabled = True
+            End Try
+        End Sub
+
+        Private Sub ClearForm()
+            editingId = 0 : txtName.Clear() : txtNuit.Clear() : txtPhone.Clear() : txtWhatsApp.Clear() : txtEmail.Clear() : txtAddress.Clear() : numLoyalty.Value = 0 : numVip.Value = 0 : btnSave.Text = "Guardar Cliente" : txtName.Focus()
+        End Sub
+    End Class
+End Namespace

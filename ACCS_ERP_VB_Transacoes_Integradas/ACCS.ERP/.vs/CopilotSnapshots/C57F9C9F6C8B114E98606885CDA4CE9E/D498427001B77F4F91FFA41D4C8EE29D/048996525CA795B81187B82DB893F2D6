@@ -1,0 +1,292 @@
+﻿Imports ACCS.ERP.Models
+Imports ACCS.ERP.Services
+
+Namespace Forms
+    Public Class ProductsForm
+        Inherits Form
+
+        Private ReadOnly _session As UserSession
+        Private ReadOnly _service As New ProductService()
+        Private ReadOnly grid As New DataGridView()
+        Private ReadOnly txtSearch As New TextBox()
+        Private ReadOnly cboCategory As New ComboBox()
+        Private ReadOnly chkLowStock As New CheckBox()
+
+        ' Form Inputs
+        Private ReadOnly txtCode As New TextBox()
+        Private ReadOnly txtName As New TextBox()
+        Private ReadOnly txtCategory As New TextBox()
+        Private ReadOnly cboUnit As New ComboBox()
+        Private ReadOnly numCostPrice As New NumericUpDown()
+        Private ReadOnly numSalePrice As New NumericUpDown()
+        Private ReadOnly numTaxRate As New NumericUpDown()
+        Private ReadOnly numStock As New NumericUpDown()
+        Private ReadOnly numMinStock As New NumericUpDown()
+
+        Private ReadOnly btnSave As New Button()
+        Private ReadOnly btnCancel As New Button()
+        Private ReadOnly btnDelete As New Button()
+        Private ReadOnly btnQuickStock As New Button()
+        Private editingId As Integer = 0
+
+        Public Sub New(session As UserSession)
+            _session = session
+            Text = "ACCS ERP — Gestão de Produtos e Stock"
+            StartPosition = FormStartPosition.CenterParent
+            Size = New Size(1280, 740)
+            MinimumSize = New Size(1024, 640)
+            BuildUi()
+            LoadProducts()
+        End Sub
+
+        Private Sub BuildUi()
+            ' Top Toolbar
+            Dim top = New Panel With {.Dock = DockStyle.Top, .Height = 56, .Padding = New Padding(12), .BackColor = Color.White}
+            Dim title = New Label With {.Text = "PRODUTOS & STOCK", .Font = New Font("Segoe UI", 15, FontStyle.Bold), .AutoSize = True, .Location = New Point(12, 14), .ForeColor = Color.FromArgb(0, 32, 96)}
+
+            txtSearch.Location = New Point(230, 14)
+            txtSearch.Width = 260
+            txtSearch.PlaceholderText = "Pesquisar código, barras ou nome..."
+            AddHandler txtSearch.TextChanged, Sub() LoadProducts()
+
+            cboCategory.Location = New Point(505, 14)
+            cboCategory.Width = 150
+            cboCategory.DropDownStyle = ComboBoxStyle.DropDownList
+            cboCategory.Items.AddRange({"Todas as Categorias", "Geral", "Alimentação", "Bebidas", "Informática", "Peças", "Serviços"})
+            cboCategory.SelectedIndex = 0
+            AddHandler cboCategory.SelectedIndexChanged, Sub() LoadProducts()
+
+            chkLowStock.Text = "Apenas Stock Baixo / Alerta"
+            chkLowStock.Location = New Point(670, 16)
+            chkLowStock.AutoSize = True
+            chkLowStock.Font = New Font("Segoe UI", 9, FontStyle.Bold)
+            chkLowStock.ForeColor = Color.DarkRed
+            AddHandler chkLowStock.CheckedChanged, Sub() LoadProducts()
+
+            top.Controls.AddRange({title, txtSearch, cboCategory, chkLowStock})
+            Controls.Add(top)
+
+            ' Right Side Editor
+            Dim editor = New GroupBox With {.Text = "Ficha de Produto / Registo", .Dock = DockStyle.Right, .Width = 400, .Padding = New Padding(12), .BackColor = Color.FromArgb(248, 249, 250)}
+            Dim y = 24
+
+            AddField(editor, "Código / SKU / Barras *", txtCode, y) : y += 52
+            AddField(editor, "Designação do Produto *", txtName, y) : y += 52
+            AddField(editor, "Categoria", txtCategory, y) : y += 52
+
+            ' Unit ComboBox
+            editor.Controls.Add(New Label With {.Text = "Unidade", .Location = New Point(15, y), .AutoSize = True})
+            cboUnit.Location = New Point(15, y + 18) : cboUnit.Width = 160
+            cboUnit.DropDownStyle = ComboBoxStyle.DropDownList
+            cboUnit.Items.AddRange({"UN", "KG", "LT", "CX", "PCT", "MT", "HORA"})
+            cboUnit.SelectedIndex = 0
+            editor.Controls.Add(cboUnit)
+            y += 52
+
+            ' Prices
+            AddNumericField(editor, "Preço de Custo (MT)", numCostPrice, y, 0D, 1000000D, 2)
+            AddNumericField(editor, "Preço de Venda (MT) *", numSalePrice, y, 0D, 1000000D, 2, 190)
+            y += 52
+
+            ' Tax Rate and Min Stock
+            AddNumericField(editor, "Taxa IVA (%)", numTaxRate, y, 0D, 100D, 1)
+            numTaxRate.Value = 0D
+            AddNumericField(editor, "Stock Mínimo Alerta", numMinStock, y, 0D, 100000D, 0, 190)
+            numMinStock.Value = 5.0D
+            y += 52
+
+            ' Current Stock
+            AddNumericField(editor, "Stock Actual em Armazém", numStock, y, -10000D, 100000D, 2)
+            y += 60
+
+            ' Buttons
+            btnSave.Text = "Guardar Produto"
+            btnSave.Width = 145
+            btnSave.Height = 36
+            btnSave.Location = New Point(15, y)
+            btnSave.BackColor = Color.FromArgb(0, 32, 96)
+            btnSave.ForeColor = Color.White
+            btnSave.FlatStyle = FlatStyle.Flat
+            btnSave.Font = New Font("Segoe UI", 9, FontStyle.Bold)
+
+            btnCancel.Text = "Limpar"
+            btnCancel.Width = 90
+            btnCancel.Height = 36
+            btnCancel.Location = New Point(170, y)
+
+            btnDelete.Text = "Eliminar"
+            btnDelete.Width = 95
+            btnDelete.Height = 36
+            btnDelete.Location = New Point(270, y)
+            btnDelete.ForeColor = Color.Firebrick
+
+            AddHandler btnSave.Click, AddressOf SaveProduct
+            AddHandler btnCancel.Click, Sub() ClearForm()
+            AddHandler btnDelete.Click, AddressOf DeleteProduct
+            editor.Controls.AddRange({btnSave, btnCancel, btnDelete})
+
+            ' Quick Stock Adjustment Button
+            btnQuickStock.Text = "⚡ Ajuste Rápido de Stock"
+            btnQuickStock.Width = 350
+            btnQuickStock.Height = 32
+            btnQuickStock.Location = New Point(15, y + 46)
+            AddHandler btnQuickStock.Click, AddressOf QuickStockAdjustment
+            editor.Controls.Add(btnQuickStock)
+
+            Controls.Add(editor)
+
+            ' Center DataGridView
+            grid.Dock = DockStyle.Fill
+            grid.ReadOnly = True
+            grid.AllowUserToAddRows = False
+            grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect
+            grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill
+            grid.RowHeadersVisible = False
+            AddHandler grid.CellDoubleClick, AddressOf GridDoubleClick
+            Controls.Add(grid)
+        End Sub
+
+        Private Sub AddField(parent As Control, labelText As String, box As Control, y As Integer)
+            parent.Controls.Add(New Label With {.Text = labelText, .Location = New Point(15, y), .AutoSize = True})
+            box.Location = New Point(15, y + 18)
+            box.Width = parent.Width - 45
+            parent.Controls.Add(box)
+        End Sub
+
+        Private Sub AddNumericField(parent As Control, labelText As String, num As NumericUpDown, y As Integer, min As Decimal, max As Decimal, decPlaces As Integer, Optional x As Integer = 15)
+            parent.Controls.Add(New Label With {.Text = labelText, .Location = New Point(x, y), .AutoSize = True})
+            num.Location = New Point(x, y + 18)
+            num.Width = 160
+            num.Minimum = min
+            num.Maximum = max
+            num.DecimalPlaces = decPlaces
+            parent.Controls.Add(num)
+        End Sub
+
+        Private Sub LoadProducts()
+            Try
+                Dim cat = If(cboCategory.SelectedIndex <= 0, "", cboCategory.SelectedItem.ToString())
+                Dim rows = _service.List(If(_session.CompanyId.HasValue, _session.CompanyId.Value, 0), txtSearch.Text, cat, chkLowStock.Checked)
+                grid.DataSource = Nothing
+                grid.DataSource = rows
+
+                For Each c As DataGridViewColumn In grid.Columns
+                    c.Visible = False
+                Next
+
+                ShowCol("Code", "Código / SKU", 110)
+                ShowCol("Name", "Designação do Produto", 250)
+                ShowCol("Category", "Categoria", 120)
+                ShowCol("Unit", "Unid.", 60)
+                ShowCol("CostPrice", "P. Custo", 90, "N2")
+                ShowCol("SalePrice", "P. Venda", 100, "N2")
+                ShowCol("TaxRate", "IVA %", 65, "N1")
+                ShowCol("CurrentStock", "Stock", 85, "N2")
+                ShowCol("MinStock", "Mínimo", 75, "N2")
+                ShowCol("StockStatus", "Estado", 100)
+            Catch ex As Exception
+                MessageBox.Show("Erro ao carregar produtos: " & ex.Message, "ACCS ERP", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            End Try
+        End Sub
+
+        Private Sub ShowCol(name As String, header As String, width As Integer, Optional format As String = "")
+            If grid.Columns.Contains(name) Then
+                grid.Columns(name).Visible = True
+                grid.Columns(name).HeaderText = header
+                grid.Columns(name).Width = width
+                If format <> "" Then grid.Columns(name).DefaultCellStyle.Format = format
+            End If
+        End Sub
+
+        Private Sub GridDoubleClick(sender As Object, e As DataGridViewCellEventArgs)
+            If e.RowIndex < 0 Then Return
+            Dim p = TryCast(grid.Rows(e.RowIndex).DataBoundItem, Product)
+            If p Is Nothing Then Return
+
+            editingId = p.Id
+            txtCode.Text = p.Code
+            txtName.Text = p.Name
+            txtCategory.Text = p.Category
+            cboUnit.SelectedItem = p.Unit
+            numCostPrice.Value = Math.Max(numCostPrice.Minimum, Math.Min(numCostPrice.Maximum, p.CostPrice))
+            numSalePrice.Value = Math.Max(numSalePrice.Minimum, Math.Min(numSalePrice.Maximum, p.SalePrice))
+            numTaxRate.Value = Math.Max(numTaxRate.Minimum, Math.Min(numTaxRate.Maximum, p.TaxRate))
+            numStock.Value = Math.Max(numStock.Minimum, Math.Min(numStock.Maximum, p.CurrentStock))
+            numMinStock.Value = Math.Max(numMinStock.Minimum, Math.Min(numMinStock.Maximum, p.MinStock))
+            btnSave.Text = "Actualizar Produto"
+        End Sub
+
+        Private Sub SaveProduct(sender As Object, e As EventArgs)
+            Try
+                Dim p As New Product With {
+                    .Id = editingId,
+                    .CompanyId = _session.CompanyId.GetValueOrDefault(),
+                    .Code = txtCode.Text.Trim(),
+                    .Name = txtName.Text.Trim(),
+                    .Category = If(String.IsNullOrWhiteSpace(txtCategory.Text), "Geral", txtCategory.Text.Trim()),
+                    .Unit = If(cboUnit.SelectedItem IsNot Nothing, cboUnit.SelectedItem.ToString(), "UN"),
+                    .CostPrice = numCostPrice.Value,
+                    .SalePrice = numSalePrice.Value,
+                    .TaxRate = numTaxRate.Value,
+                    .CurrentStock = numStock.Value,
+                    .MinStock = numMinStock.Value,
+                    .Active = True
+                }
+
+                _service.Save(p, p.CompanyId)
+                MessageBox.Show(If(editingId = 0, "Produto registado com sucesso!", "Produto actualizado com sucesso!"), "ACCS ERP", MessageBoxButtons.OK, MessageBoxIcon.Information)
+                ClearForm()
+                LoadProducts()
+            Catch ex As Exception
+                MessageBox.Show(ex.Message, "ACCS ERP", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+            End Try
+        End Sub
+
+        Private Sub QuickStockAdjustment(sender As Object, e As EventArgs)
+            If editingId = 0 Then
+                MessageBox.Show("Selecione um produto primeiro para ajustar o stock.", "Aviso", MessageBoxButtons.OK, MessageBoxIcon.Information)
+                Return
+            End If
+
+            Dim input = InputBox("Introduza a quantidade a ajustar (use número positivo para entrada ou negativo para saída):", "Ajuste Rápido de Stock", "10")
+            Dim delta As Decimal
+            If Decimal.TryParse(input, delta) AndAlso delta <> 0 Then
+                Try
+                    _service.AdjustStock(editingId, _session.CompanyId.GetValueOrDefault(), delta, "Ajuste manual rápido")
+                    MessageBox.Show($"Stock ajustado em {delta:+0.##;-0.##} unidades com sucesso.", "ACCS ERP")
+                    LoadProducts()
+                Catch ex As Exception
+                    MessageBox.Show("Erro ao ajustar stock: " & ex.Message, "ACCS ERP", MessageBoxButtons.OK, MessageBoxIcon.Error)
+                End Try
+            End If
+        End Sub
+
+        Private Sub DeleteProduct(sender As Object, e As EventArgs)
+            If editingId = 0 Then Return
+            If MessageBox.Show("Eliminar este produto?", "Confirmação", MessageBoxButtons.YesNo, MessageBoxIcon.Question) <> DialogResult.Yes Then Return
+
+            Try
+                _service.Delete(editingId, _session.CompanyId.GetValueOrDefault())
+                ClearForm()
+                LoadProducts()
+            Catch ex As Exception
+                MessageBox.Show("Não foi possível eliminar o produto." & Environment.NewLine & ex.Message, "ACCS ERP", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            End Try
+        End Sub
+
+        Private Sub ClearForm()
+            editingId = 0
+            txtCode.Clear()
+            txtName.Clear()
+            txtCategory.Clear()
+            cboUnit.SelectedIndex = 0
+            numCostPrice.Value = 0
+            numSalePrice.Value = 0
+            numTaxRate.Value = 0D
+            numStock.Value = 0
+            numMinStock.Value = 5.0D
+            btnSave.Text = "Guardar Produto"
+            txtCode.Focus()
+        End Sub
+    End Class
+End Namespace

@@ -1,0 +1,184 @@
+Imports System.Windows.Forms
+Imports System.Drawing
+Imports ACCS.ERP.Models
+Imports ACCS.ERP.Services
+
+Namespace Forms
+    Public Class DocumentEntryForm
+        Inherits Form
+        Private ReadOnly _session As UserSession
+        Private ReadOnly _invoiceService As New InvoiceService()
+        Private ReadOnly _customerService As New CustomerService()
+        Private ReadOnly _productService As New ProductService()
+        Private _customers As New List(Of Customer)()
+        Private _products As New List(Of Product)()
+
+        Private ReadOnly cboType As New ComboBox()
+        Private ReadOnly cboCustomer As New ComboBox()
+        Private ReadOnly txtNuit As New TextBox()
+        Private ReadOnly txtAddress As New TextBox()
+        Private ReadOnly dtIssued As New DateTimePicker()
+        Private ReadOnly dtDue As New DateTimePicker()
+        Private ReadOnly cboPayment As New ComboBox()
+        Private ReadOnly txtNotes As New TextBox()
+        Private ReadOnly cboProduct As New ComboBox()
+        Private ReadOnly numQty As New NumericUpDown()
+        Private ReadOnly numPrice As New NumericUpDown()
+        Private ReadOnly numDiscount As New NumericUpDown()
+        Private ReadOnly numTax As New NumericUpDown()
+        Private ReadOnly btnAdd As New Button()
+        Private ReadOnly grid As New DataGridView()
+        Private ReadOnly lblSubtotal As New Label()
+        Private ReadOnly lblTax As New Label()
+        Private ReadOnly lblTotal As New Label()
+        Private ReadOnly btnSave As New Button()
+        Private ReadOnly btnRemove As New Button()
+        Private ReadOnly items As New List(Of InvoiceItem)()
+
+        Public Event DocumentSaved()
+
+        Public Sub New(session As UserSession)
+            _session = session
+            Text = "ACCS ERP — Emitir Documento"
+            StartPosition = FormStartPosition.CenterParent
+            Size = New Size(1180, 760)
+            MinimumSize = New Size(1050, 680)
+            Font = New Font("Segoe UI", 9.0F)
+            BuildUi()
+            LoadData()
+        End Sub
+
+        Private Sub BuildUi()
+            Dim header As New Panel With {.Dock = DockStyle.Top, .Height = 155, .Padding = New Padding(15), .BackColor = Color.White}
+            Dim title As New Label With {.Text = "EMISSÃO DE DOCUMENTO", .Font = New Font("Segoe UI", 16, FontStyle.Bold), .ForeColor = Color.FromArgb(0, 32, 96), .Location = New Point(15, 12), .AutoSize = True}
+            header.Controls.Add(title)
+            AddField(header, "Tipo", cboType, 15, 55, 180)
+            cboType.DropDownStyle = ComboBoxStyle.DropDownList : cboType.Items.AddRange({"Factura (FT)", "Factura/Recibo (FR)", "Cotação / Proforma (FP)", "Recibo (RC)"}) : cboType.SelectedIndex = 0
+            AddHandler cboType.SelectedIndexChanged, AddressOf TypeChanged
+            AddField(header, "Cliente", cboCustomer, 210, 55, 300) : cboCustomer.DropDownStyle = ComboBoxStyle.DropDownList : AddHandler cboCustomer.SelectedIndexChanged, AddressOf CustomerChanged
+            AddField(header, "NUIT", txtNuit, 525, 55, 130) : txtNuit.ReadOnly = True
+            AddField(header, "Endereço", txtAddress, 670, 55, 230) : txtAddress.ReadOnly = True
+            AddField(header, "Emissão", dtIssued, 15, 105, 150) : dtIssued.Format = DateTimePickerFormat.Short
+            AddField(header, "Vencimento", dtDue, 180, 105, 150) : dtDue.Format = DateTimePickerFormat.Short : dtDue.Value = Date.Today.AddDays(30)
+            AddField(header, "Pagamento", cboPayment, 345, 105, 180) : cboPayment.DropDownStyle = ComboBoxStyle.DropDownList : cboPayment.Items.AddRange({"Dinheiro", "M-Pesa", "e-Mola", "Cartão/POS", "Transferência", "Outro"}) : cboPayment.SelectedIndex = 0
+            AddField(header, "Observações", txtNotes, 540, 105, 360)
+            Controls.Add(header)
+
+            Dim itemBar As New Panel With {.Dock = DockStyle.Top, .Height = 90, .Padding = New Padding(15), .BackColor = Color.FromArgb(245, 247, 250)}
+            AddField(itemBar, "Produto/Serviço", cboProduct, 15, 12, 330) : cboProduct.DropDownStyle = ComboBoxStyle.DropDownList : AddHandler cboProduct.SelectedIndexChanged, AddressOf ProductChanged
+            AddField(itemBar, "Qtd.", numQty, 360, 12, 90) : numQty.DecimalPlaces = 3 : numQty.Minimum = 0.001D : numQty.Maximum = 1000000D : numQty.Value = 1D
+            AddField(itemBar, "Preço", numPrice, 465, 12, 120) : SetupMoney(numPrice)
+            AddField(itemBar, "Desc.%", numDiscount, 600, 12, 90) : numDiscount.DecimalPlaces = 2 : numDiscount.Maximum = 100D
+            AddField(itemBar, "IVA %", numTax, 705, 12, 90) : numTax.DecimalPlaces = 3 : numTax.Maximum = 100D
+            btnAdd.Text = "Adicionar" : btnAdd.SetBounds(810, 32, 110, 30) : AddHandler btnAdd.Click, AddressOf AddItem : itemBar.Controls.Add(btnAdd)
+            Controls.Add(itemBar)
+
+            Dim footer As New Panel With {.Dock = DockStyle.Bottom, .Height = 92, .Padding = New Padding(15), .BackColor = Color.White}
+            lblSubtotal.SetBounds(560, 12, 180, 24) : lblTax.SetBounds(750, 12, 160, 24) : lblTotal.SetBounds(920, 10, 220, 28)
+            lblTotal.Font = New Font("Segoe UI", 13, FontStyle.Bold) : lblTotal.ForeColor = Color.FromArgb(0, 90, 50)
+            btnRemove.Text = "Remover linha" : btnRemove.SetBounds(15, 18, 130, 34) : AddHandler btnRemove.Click, AddressOf RemoveItem
+            btnSave.Text = "EMITIR DOCUMENTO" : btnSave.SetBounds(330, 18, 190, 38) : btnSave.BackColor = Color.FromArgb(0, 32, 96) : btnSave.ForeColor = Color.White : btnSave.FlatStyle = FlatStyle.Flat : btnSave.Font = New Font("Segoe UI", 9, FontStyle.Bold) : AddHandler btnSave.Click, AddressOf SaveDocument
+            footer.Controls.AddRange({btnRemove, btnSave, lblSubtotal, lblTax, lblTotal}) : Controls.Add(footer)
+
+            grid.Dock = DockStyle.Fill : grid.ReadOnly = True : grid.AllowUserToAddRows = False : grid.RowHeadersVisible = False : grid.SelectionMode = DataGridViewSelectionMode.FullRowSelect : grid.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill
+            Controls.Add(grid)
+        End Sub
+
+        Private Shared Sub AddField(parent As Control, caption As String, control As Control, x As Integer, y As Integer, width As Integer)
+            Dim lbl As New Label With {.Text = caption, .Location = New Point(x, y), .AutoSize = True}
+            control.SetBounds(x, y + 20, width, 28) : parent.Controls.Add(lbl) : parent.Controls.Add(control)
+        End Sub
+        Private Shared Sub SetupMoney(n As NumericUpDown)
+            n.DecimalPlaces = 2 : n.Maximum = 999999999D : n.ThousandsSeparator = True
+        End Sub
+
+        Private Sub LoadData()
+            Try
+                Dim companyId = If(_session.CompanyId.HasValue, _session.CompanyId.Value, 0)
+                _customers = _customerService.List(companyId).OrderBy(Function(c) c.Name).ToList()
+                cboCustomer.DataSource = _customers : cboCustomer.DisplayMember = "Name"
+                _products = _productService.List(companyId).Where(Function(p) p.Active).OrderBy(Function(p) p.Name).ToList()
+                cboProduct.DataSource = _products : cboProduct.DisplayMember = "Name"
+                numTax.Value = Math.Min(numTax.Maximum, Math.Max(numTax.Minimum, _invoiceService.GetDefaultTaxRate(companyId)))
+                RefreshGrid() : TypeChanged(Nothing, EventArgs.Empty)
+            Catch ex As Exception
+                MessageBox.Show("Não foi possível preparar a emissão. Execute também database\002_stock_accounts_documents.sql. Detalhe: " & ex.Message, "ACCS ERP", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            End Try
+        End Sub
+
+        Private Function SelectedType() As String
+            If cboType.SelectedIndex = 1 Then Return "FR"
+            If cboType.SelectedIndex = 2 Then Return "FP"
+            If cboType.SelectedIndex = 3 Then Return "RC"
+            Return "FT"
+        End Function
+
+        Private Sub TypeChanged(sender As Object, e As EventArgs)
+            Dim t = SelectedType()
+            dtDue.Enabled = (t = "FT")
+            cboPayment.Enabled = (t = "FR" OrElse t = "RC")
+            If t = "RC" Then
+                btnAdd.Text = "Adicionar valor"
+            Else
+                btnAdd.Text = "Adicionar"
+            End If
+        End Sub
+
+        Private Sub CustomerChanged(sender As Object, e As EventArgs)
+            Dim c = TryCast(cboCustomer.SelectedItem, Customer)
+            If c Is Nothing Then Return
+            txtNuit.Text = c.Nuit : txtAddress.Text = c.Address
+        End Sub
+
+        Private Sub ProductChanged(sender As Object, e As EventArgs)
+            Dim p = TryCast(cboProduct.SelectedItem, Product)
+            If p Is Nothing Then Return
+            numPrice.Value = Math.Min(numPrice.Maximum, Math.Max(numPrice.Minimum, p.SalePrice))
+            numTax.Value = Math.Min(numTax.Maximum, Math.Max(numTax.Minimum, p.TaxRate))
+        End Sub
+
+        Private Sub AddItem(sender As Object, e As EventArgs)
+            Dim t = SelectedType()
+            Dim p = TryCast(cboProduct.SelectedItem, Product)
+            If t <> "RC" AndAlso p Is Nothing Then Return
+            Dim item As New InvoiceItem With {.ProductId = If(t = "RC", CType(Nothing, Integer?), p.Id), .ProductCode = If(t = "RC", "PAG", p.Code), .Description = If(t = "RC", "Pagamento / Recibo", p.Name), .Quantity = numQty.Value, .UnitPrice = numPrice.Value, .DiscountPercent = If(t = "RC", 0D, numDiscount.Value), .TaxRate = If(t = "RC", 0D, numTax.Value)}
+            If t = "RC" Then
+                item.Quantity = 1D
+                items.Clear() ' um recibo representa um valor recebido nesta versão
+            End If
+            items.Add(item) : RefreshGrid()
+        End Sub
+
+        Private Sub RemoveItem(sender As Object, e As EventArgs)
+            If grid.CurrentRow Is Nothing Then Return
+            Dim idx = grid.CurrentRow.Index
+            If idx >= 0 AndAlso idx < items.Count Then items.RemoveAt(idx)
+            RefreshGrid()
+        End Sub
+
+        Private Sub RefreshGrid()
+            grid.DataSource = Nothing
+            grid.DataSource = items.Select(Function(i) New With {.Código = i.ProductCode, .Descrição = i.Description, .Quantidade = i.Quantity, .Preço = i.UnitPrice, .Desconto = i.DiscountPercent, .IVA = i.TaxRate, .Total = i.Total}).ToList()
+            Dim subtotal = items.Sum(Function(i) i.Subtotal), tax = items.Sum(Function(i) i.TaxAmount), total = items.Sum(Function(i) i.Total)
+            lblSubtotal.Text = $"Subtotal: {subtotal:N2} MT" : lblTax.Text = $"IVA: {tax:N2} MT" : lblTotal.Text = $"TOTAL: {total:N2} MT"
+        End Sub
+
+        Private Sub SaveDocument(sender As Object, e As EventArgs)
+            Dim c = TryCast(cboCustomer.SelectedItem, Customer)
+            If c Is Nothing Then MessageBox.Show("Seleccione o cliente.") : Return
+            Dim inv As New Invoice With {.CompanyId = If(_session.CompanyId.HasValue, _session.CompanyId.Value, 0), .CustomerId = c.Id, .CustomerName = c.Name, .CustomerNuit = c.Nuit, .CustomerAddress = c.Address, .DocumentType = SelectedType(), .DateIssued = dtIssued.Value.Date, .DateDue = dtDue.Value.Date, .PaymentMethod = cboPayment.Text, .Notes = txtNotes.Text, .CreatedBy = _session.Id, .Status = If(SelectedType() = "FR" OrElse SelectedType() = "RC", "Paga", "Emitida")}
+            inv.Items.AddRange(items)
+            If MessageBox.Show($"Confirmar emissão de {inv.DocumentTypeName} no valor de {inv.TotalAmount:N2} MT?", "Confirmar", MessageBoxButtons.YesNo, MessageBoxIcon.Question) <> DialogResult.Yes Then Return
+            Try
+                btnSave.Enabled = False
+                _invoiceService.Save(inv, inv.CompanyId)
+                MessageBox.Show($"Documento emitido com sucesso.{Environment.NewLine}{inv.DocumentNumber}", "ACCS ERP", MessageBoxButtons.OK, MessageBoxIcon.Information)
+                RaiseEvent DocumentSaved() : DialogResult = DialogResult.OK : Close()
+            Catch ex As Exception
+                MessageBox.Show("A operação foi cancelada e revertida. Nenhum movimento parcial foi gravado." & Environment.NewLine & Environment.NewLine & ex.Message, "ACCS ERP", MessageBoxButtons.OK, MessageBoxIcon.Error)
+            Finally
+                btnSave.Enabled = True
+            End Try
+        End Sub
+    End Class
+End Namespace
